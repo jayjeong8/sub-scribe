@@ -778,7 +778,7 @@ function mergeCues(cues: CaptionCueRaw[]): CaptionCueRaw[] {
 }
 
 /** Debug diagnostics: test each fetch step independently */
-async function runDebugDiagnostics(videoId: string) {
+async function runDebugDiagnostics(videoId: string, lang?: string) {
   const startTime = Date.now();
   // biome-ignore lint/suspicious/noExplicitAny: debug diagnostics collect heterogeneous step results
   const steps: Record<string, any> = {};
@@ -887,6 +887,108 @@ async function runDebugDiagnostics(videoId: string) {
   const oEmbed = await fetchOEmbedMeta(videoId);
   steps.oEmbed = oEmbed ?? { error: "Failed or returned null" };
 
+  // 5. Cue fetch diagnostics (when lang is provided)
+  if (lang) {
+    // biome-ignore lint/suspicious/noExplicitAny: debug diagnostics collect heterogeneous results
+    const cueFetch: Record<string, any> = {};
+
+    // Find matching track's baseUrl
+    let trackBaseUrl: string | null = null;
+    try {
+      const meta = await fetchCaptionTracks(videoId);
+      const track = meta.captionTracks.find((t) => t.languageCode === lang);
+      cueFetch.trackFound = !!track;
+      cueFetch.trackBaseUrl = track?.baseUrl ?? null;
+      cueFetch.allTrackLangs = meta.captionTracks.map((t) => t.languageCode);
+      trackBaseUrl = track?.baseUrl ?? null;
+    } catch (err) {
+      cueFetch.trackError = err instanceof Error ? err.message : String(err);
+    }
+
+    if (trackBaseUrl) {
+      // Step 1: baseUrl + fmt=json3 + YouTube UA
+      try {
+        const url = new URL(trackBaseUrl);
+        url.searchParams.set("fmt", "json3");
+        cueFetch.step1_url = url.toString();
+        const res = await fetchWithTimeout(
+          url.toString(),
+          {
+            headers: {
+              "User-Agent":
+                "com.google.ios.youtube/20.03.02 (iPhone16,2; U; CPU iOS 18_2_1 like Mac OS X;)",
+            },
+          },
+          8000,
+        );
+        const text = await res.text();
+        cueFetch.step1 = {
+          status: res.status,
+          contentLength: text.length,
+          contentPreview: text.slice(0, 200),
+          isJSON: text.startsWith("{") || text.startsWith("["),
+          hasVTTMarker: text.includes("-->"),
+        };
+        // Try parse as JSON3
+        try {
+          const data = JSON.parse(text);
+          cueFetch.step1.eventCount = data.events?.length ?? 0;
+        } catch {
+          if (text.includes("-->")) {
+            cueFetch.step1.webvttCueCount = parseWebVTT(text).length;
+          }
+        }
+      } catch (err) {
+        cueFetch.step1 = { error: err instanceof Error ? err.message : String(err) };
+      }
+
+      // Step 2: baseUrl as-is (no UA)
+      try {
+        cueFetch.step2_url = trackBaseUrl;
+        const res = await fetchWithTimeout(trackBaseUrl, {}, 8000);
+        const text = await res.text();
+        cueFetch.step2 = {
+          status: res.status,
+          contentLength: text.length,
+          contentPreview: text.slice(0, 200),
+          hasVTTMarker: text.includes("-->"),
+        };
+        if (text.includes("-->")) {
+          cueFetch.step2.webvttCueCount = parseWebVTT(text).length;
+        }
+      } catch (err) {
+        cueFetch.step2 = { error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+
+    // Step 3: Invidious cue fetch per instance
+    const isLangCode = /^[a-z]{2,3}(-[A-Za-z]{2,4})?$/.test(lang);
+    const query = isLangCode
+      ? `lang=${encodeURIComponent(lang)}`
+      : `label=${encodeURIComponent(lang)}`;
+    for (const instance of INVIDIOUS_INSTANCES) {
+      const invUrl = `https://${instance}/api/v1/captions/${videoId}?${query}`;
+      try {
+        cueFetch[`step3_${instance}_url`] = invUrl;
+        const res = await fetchWithTimeout(invUrl, {}, 4000);
+        const text = await res.text();
+        cueFetch[`step3_${instance}`] = {
+          status: res.status,
+          contentLength: text.length,
+          contentPreview: text.slice(0, 200),
+          hasVTTMarker: text.includes("-->"),
+          webvttCueCount: text.includes("-->") ? parseWebVTT(text).length : 0,
+        };
+      } catch (err) {
+        cueFetch[`step3_${instance}`] = {
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+    }
+
+    steps.cueFetch = cueFetch;
+  }
+
   return {
     videoId,
     timestamp: new Date().toISOString(),
@@ -915,7 +1017,7 @@ export async function GET(request: NextRequest) {
 
   // Debug mode: return diagnostics for each fetch step
   if (debug === "1") {
-    const diagnostics = await runDebugDiagnostics(videoId);
+    const diagnostics = await runDebugDiagnostics(videoId, lang ?? undefined);
     return NextResponse.json(diagnostics, {
       headers: { "Cache-Control": "no-store" },
     });
