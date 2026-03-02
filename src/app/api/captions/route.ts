@@ -448,7 +448,7 @@ async function fetchCuesFromInvidious(
   for (const instance of INVIDIOUS_INSTANCES) {
     try {
       const res = await fetchWithTimeout(
-        `https://${instance}/api/v1/captions/${videoId}?label=&lang=${lang}`,
+        `https://${instance}/api/v1/captions/${videoId}?${/^[a-z]{2,3}(-[A-Za-z]{2,4})?$/.test(lang) ? `lang=${encodeURIComponent(lang)}` : `label=${encodeURIComponent(lang)}`}`,
         {},
         4000,
       );
@@ -582,7 +582,7 @@ async function fetchCaptionCues(
   videoId: string,
   lang: string,
 ): Promise<CaptionCueRaw[]> {
-  // Primary: try the timedtext baseUrl (JSON format, or WebVTT from Invidious)
+  // Step 1: try baseUrl + fmt=json3 (YouTube timedtext JSON format)
   try {
     const url = new URL(baseUrl);
     url.searchParams.set("fmt", "json3");
@@ -644,8 +644,23 @@ async function fetchCaptionCues(
       }
     }
   } catch (err) {
+    console.warn(`[captions] timedtext fetch failed: ${err instanceof Error ? err.message : err}`);
+  }
+
+  // Step 2: try baseUrl as-is without fmt=json3 (Invidious returns WebVTT directly)
+  try {
+    const res = await fetchWithTimeout(baseUrl, {}, 8000);
+    if (res.ok) {
+      const text = await res.text();
+      if (text?.includes("-->")) {
+        console.log("[captions] raw baseUrl returned WebVTT, parsing directly");
+        const cues = parseWebVTT(text);
+        if (cues.length > 0) return cues;
+      }
+    }
+  } catch (err) {
     console.warn(
-      `[captions] timedtext fetch failed, trying invidious: ${err instanceof Error ? err.message : err}`,
+      `[captions] raw baseUrl fetch failed, trying invidious: ${err instanceof Error ? err.message : err}`,
     );
   }
 
