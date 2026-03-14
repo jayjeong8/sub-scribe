@@ -30,7 +30,16 @@ interface CaptionCueRaw {
 const INVIDIOUS_INSTANCES = ["inv.nadeko.net", "yewtu.be", "invidious.nerdvpn.de"];
 
 /** Piped API instances for additional fallback (proxies caption content through own servers) */
-const PIPED_INSTANCES = ["pipedapi.kavin.rocks", "pipedapi.adminforge.de"];
+const PIPED_INSTANCES = [
+  "pipedapi.kavin.rocks",
+  "pipedapi.adminforge.de",
+  "pipedapi-libre.kavin.rocks",
+  "api.piped.yt",
+  "piapi.ggtyler.dev",
+  "pipedapi.darkness.services",
+  "pipedapi.reallyaweso.me",
+  "pipedapi.leptons.xyz",
+];
 
 /** Consent cookies to bypass YouTube's GDPR consent page on EU/serverless IPs */
 const YT_CONSENT_COOKIES = "CONSENT=PENDING+999; SOCS=CAESEwgDEgk2ODE3MTY1NzQaAmVuIAEaBgiA_LyuBg";
