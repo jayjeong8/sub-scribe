@@ -216,7 +216,7 @@ async function fetchFromWatchPage(videoId: string) {
         Cookie: YT_CONSENT_COOKIES,
       },
     },
-    8000,
+    4000,
   );
 
   if (!res.ok) {
@@ -808,7 +808,7 @@ async function fetchCaptionCues(
   lang: string,
   remainingMs: () => number = () => 9000,
 ): Promise<CaptionCueRaw[]> {
-  // Step 1: try baseUrl + fmt=json3 (YouTube timedtext JSON format)
+  // Try baseUrl + fmt=json3 (YouTube timedtext JSON format)
   try {
     const url = new URL(baseUrl);
     url.searchParams.set("fmt", "json3");
@@ -821,7 +821,7 @@ async function fetchCaptionCues(
             "com.google.ios.youtube/20.03.02 (iPhone16,2; U; CPU iOS 18_2_1 like Mac OS X;)",
         },
       },
-      8000,
+      Math.min(4000, remainingMs()),
     );
 
     if (res.ok) {
@@ -871,23 +871,6 @@ async function fetchCaptionCues(
     }
   } catch (err) {
     console.warn(`[captions] timedtext fetch failed: ${err instanceof Error ? err.message : err}`);
-  }
-
-  // Step 2: try baseUrl as-is without fmt=json3 (Invidious returns WebVTT directly)
-  try {
-    const res = await fetchWithTimeout(baseUrl, {}, 8000);
-    if (res.ok) {
-      const text = await res.text();
-      if (text?.includes("-->")) {
-        console.log("[captions] raw baseUrl returned WebVTT, parsing directly");
-        const cues = parseWebVTT(text);
-        if (cues.length > 0) return cues;
-      }
-    }
-  } catch (err) {
-    console.warn(
-      `[captions] raw baseUrl fetch failed, trying invidious: ${err instanceof Error ? err.message : err}`,
-    );
   }
 
   // Fallback: Piped API (proxies subtitle content, parallel racing)
