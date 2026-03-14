@@ -735,20 +735,6 @@ async function fetchCaptionTracks(videoId: string) {
     }
   }
 
-  // Fallback: Invidious API (works from cloud IPs where YouTube blocks InnerTube)
-  if (!result) {
-    try {
-      const invResult = await fetchTracksFromInvidious(videoId);
-      if (invResult && invResult.captionTracks.length > 0) {
-        result = invResult;
-      }
-    } catch (err) {
-      console.warn(
-        `[captions] invidious failed for ${videoId}: ${err instanceof Error ? err.message : err}`,
-      );
-    }
-  }
-
   // Fallback: Piped API (proxies through own servers, bypasses YouTube IP blocks)
   if (!result) {
     try {
@@ -759,6 +745,20 @@ async function fetchCaptionTracks(videoId: string) {
     } catch (err) {
       console.warn(
         `[captions] piped failed for ${videoId}: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
+
+  // Fallback: Invidious API (most instances have API disabled, kept for future re-activation)
+  if (!result) {
+    try {
+      const invResult = await fetchTracksFromInvidious(videoId);
+      if (invResult && invResult.captionTracks.length > 0) {
+        result = invResult;
+      }
+    } catch (err) {
+      console.warn(
+        `[captions] invidious failed for ${videoId}: ${err instanceof Error ? err.message : err}`,
       );
     }
   }
@@ -882,15 +882,15 @@ async function fetchCaptionCues(
     );
   }
 
-  // Fallback: Invidious WebVTT
-  const invCues = await fetchCuesFromInvidious(videoId, lang);
-  if (invCues && invCues.length > 0) return invCues;
-
-  // Fallback: Piped API (proxies subtitle content)
+  // Fallback: Piped API (proxies subtitle content, parallel racing)
   const pipedCues = await fetchCuesFromPiped(videoId, lang);
   if (pipedCues && pipedCues.length > 0) return pipedCues;
 
-  throw new Error("Failed to fetch caption cues from timedtext, Invidious, and Piped");
+  // Fallback: Invidious WebVTT (most instances have API disabled, kept for future re-activation)
+  const invCues = await fetchCuesFromInvidious(videoId, lang);
+  if (invCues && invCues.length > 0) return invCues;
+
+  throw new Error("Failed to fetch caption cues from timedtext, Piped, and Invidious");
 }
 
 const SENTENCE_SPLIT_RE = /(?<=[.?!。？！])\s*/;
