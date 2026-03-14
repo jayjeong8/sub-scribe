@@ -205,7 +205,7 @@ function mapAndFilterTracks(tracks: InnerTubeTrack[]) {
 }
 
 /** Primary: extract caption data from YouTube watch page HTML */
-async function fetchFromWatchPage(videoId: string) {
+async function fetchFromWatchPage(videoId: string, remainingMs: () => number = () => 9000) {
   const res = await fetchWithTimeout(
     `https://www.youtube.com/watch?v=${videoId}&hl=en`,
     {
@@ -216,7 +216,7 @@ async function fetchFromWatchPage(videoId: string) {
         Cookie: YT_CONSENT_COOKIES,
       },
     },
-    4000,
+    Math.min(4000, remainingMs()),
   );
 
   if (!res.ok) {
@@ -315,7 +315,11 @@ const INNERTUBE_CLIENTS = [
 ] as const;
 
 /** Try fetching caption tracks with a specific InnerTube client */
-async function tryFetchWithClient(videoId: string, client: (typeof INNERTUBE_CLIENTS)[number]) {
+async function tryFetchWithClient(
+  videoId: string,
+  client: (typeof INNERTUBE_CLIENTS)[number],
+  remainingMs: () => number = () => 9000,
+) {
   const res = await fetchWithTimeout(
     "https://www.youtube.com/youtubei/v1/player",
     {
@@ -330,7 +334,7 @@ async function tryFetchWithClient(videoId: string, client: (typeof INNERTUBE_CLI
         context: client.context,
       }),
     },
-    3000,
+    Math.min(3000, remainingMs()),
   );
 
   if (!res.ok) {
@@ -702,8 +706,14 @@ async function fetchCaptionTracks(videoId: string, remainingMs: () => number = (
   } | null = null;
 
   for (const client of INNERTUBE_CLIENTS) {
+    if (remainingMs() < 1000) {
+      console.warn(
+        `[captions] deadline approaching (${remainingMs()}ms left), skipping ${client.label}`,
+      );
+      break;
+    }
     try {
-      const r = await tryFetchWithClient(videoId, client);
+      const r = await tryFetchWithClient(videoId, client, remainingMs);
 
       if (r.captionTracks.length === 0) {
         console.warn(
@@ -725,9 +735,9 @@ async function fetchCaptionTracks(videoId: string, remainingMs: () => number = (
   }
 
   // Fallback: watch page scraping (may return POT-required URLs, but still useful for metadata)
-  if (!result) {
+  if (!result && remainingMs() >= 1000) {
     try {
-      const r = await fetchFromWatchPage(videoId);
+      const r = await fetchFromWatchPage(videoId, remainingMs);
 
       if (r.captionTracks.length > 0) {
         console.log(
