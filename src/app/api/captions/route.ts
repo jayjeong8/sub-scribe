@@ -104,6 +104,9 @@ function langCodeFromLabel(label: string): string | undefined {
   return LANG_LABEL_TO_CODE[label] ?? LANG_LABEL_TO_CODE[label.replace(/\s*\(.*\)$/, "")];
 }
 
+/** Global deadline for entire GET handler (Vercel Hobby 10s function limit) */
+const VERCEL_DEADLINE_MS = 9000;
+
 /** Fetch with AbortController timeout (safe for Vercel Hobby 10s limit) */
 async function fetchWithTimeout(
   url: string,
@@ -678,7 +681,7 @@ async function fetchCuesFromPiped(videoId: string, lang: string): Promise<Captio
 }
 
 /** Fetch caption tracks: InnerTube mobile clients first (POT-free URLs), watch page fallback */
-async function fetchCaptionTracks(videoId: string) {
+async function fetchCaptionTracks(videoId: string, remainingMs: () => number = () => 9000) {
   // Primary: InnerTube mobile clients (IOS/ANDROID return caption URLs without POT requirement)
   let lastError: Error | null = null;
   let result: {
@@ -799,6 +802,7 @@ async function fetchCaptionCues(
   baseUrl: string,
   videoId: string,
   lang: string,
+  remainingMs: () => number = () => 9000,
 ): Promise<CaptionCueRaw[]> {
   // Step 1: try baseUrl + fmt=json3 (YouTube timedtext JSON format)
   try {
@@ -1327,7 +1331,10 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const meta = await fetchCaptionTracks(videoId);
+    const deadline = Date.now() + VERCEL_DEADLINE_MS;
+    const remainingMs = () => Math.max(deadline - Date.now(), 500);
+
+    const meta = await fetchCaptionTracks(videoId, remainingMs);
 
     // Only cache responses that have caption tracks (avoid caching empty/broken results)
     const cacheHeaders =
@@ -1351,7 +1358,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const rawCues = await fetchCaptionCues(track.baseUrl, videoId, lang);
+    const rawCues = await fetchCaptionCues(track.baseUrl, videoId, lang, remainingMs);
     const cues = merge === "0" ? rawCues : mergeCues(rawCues);
 
     return NextResponse.json({ ...meta, cues }, { headers: cacheHeaders });
