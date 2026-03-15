@@ -107,9 +107,9 @@ function langCodeFromLabel(label: string): string | undefined {
 /** Global deadline for entire GET handler (Vercel Hobby 10s function limit) */
 const VERCEL_DEADLINE_MS = 9000;
 
-/** Feature flags: disable broken third-party fallbacks (all instances currently down) */
+/** Feature flags: disable broken third-party fallbacks */
 const ENABLE_PIPED_FALLBACK = false;
-const ENABLE_INVIDIOUS_FALLBACK = false;
+const ENABLE_INVIDIOUS_FALLBACK = true;
 
 /** Fetch with AbortController timeout (safe for Vercel Hobby 10s limit) */
 async function fetchWithTimeout(
