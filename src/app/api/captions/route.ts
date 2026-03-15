@@ -706,13 +706,13 @@ async function fetchCaptionTracks(videoId: string, remainingMs: () => number = (
   } | null = null;
 
   for (const client of INNERTUBE_CLIENTS) {
-    if (remainingMs() < 1000) {
-      console.warn(
-        `[captions] deadline approaching (${remainingMs()}ms left), skipping ${client.label}`,
-      );
+    const budget = remainingMs();
+    if (budget < 1000) {
+      console.warn(`[captions] deadline guard: ${budget}ms left, skipping ${client.label}`);
       break;
     }
     try {
+      console.log(`[captions] trying ${client.label} (${budget}ms remaining)`);
       const r = await tryFetchWithClient(videoId, client, remainingMs);
 
       if (r.captionTracks.length === 0) {
@@ -730,12 +730,15 @@ async function fetchCaptionTracks(videoId: string, remainingMs: () => number = (
       break;
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
-      console.warn(`[captions] ${client.label} failed for ${videoId}: ${lastError.message}`);
+      console.warn(
+        `[captions] ${client.label} failed for ${videoId} (${remainingMs()}ms left): ${lastError.message}`,
+      );
     }
   }
 
   // Fallback: watch page scraping (may return POT-required URLs, but still useful for metadata)
   if (!result && remainingMs() >= 1000) {
+    console.log(`[captions] trying watch page (${remainingMs()}ms remaining)`);
     try {
       const r = await fetchFromWatchPage(videoId, remainingMs);
 
@@ -782,6 +785,7 @@ async function fetchCaptionTracks(videoId: string, remainingMs: () => number = (
 
   // All methods failed — return empty result
   if (!result) {
+    console.warn(`[captions] all methods exhausted for ${videoId} (${remainingMs()}ms left)`);
     result = {
       videoId,
       title: "Unknown",
