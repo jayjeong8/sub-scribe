@@ -736,7 +736,35 @@ async function fetchCaptionTracks(videoId: string, remainingMs: () => number = (
     }
   }
 
-  // Fallback: watch page scraping (may return POT-required URLs, but still useful for metadata)
+  // Fallback: Invidious API (try before watch page — watch page returns empty on cloud IPs)
+  if (!result && ENABLE_INVIDIOUS_FALLBACK && remainingMs() >= 1000) {
+    try {
+      const invResult = await fetchTracksFromInvidious(videoId);
+      if (invResult && invResult.captionTracks.length > 0) {
+        result = invResult;
+      }
+    } catch (err) {
+      console.warn(
+        `[captions] invidious failed for ${videoId}: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
+
+  // Fallback: Piped API (proxies through own servers, bypasses YouTube IP blocks)
+  if (!result && ENABLE_PIPED_FALLBACK && remainingMs() >= 1000) {
+    try {
+      const pipedResult = await fetchTracksFromPiped(videoId);
+      if (pipedResult && pipedResult.captionTracks.length > 0) {
+        result = pipedResult;
+      }
+    } catch (err) {
+      console.warn(
+        `[captions] piped failed for ${videoId}: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
+
+  // Fallback: watch page scraping (last resort — returns empty on cloud IPs like Vercel)
   if (!result && remainingMs() >= 1000) {
     console.log(`[captions] trying watch page (${remainingMs()}ms remaining)`);
     try {
@@ -751,34 +779,6 @@ async function fetchCaptionTracks(videoId: string, remainingMs: () => number = (
     } catch (err) {
       console.warn(
         `[captions] watch page failed for ${videoId}: ${err instanceof Error ? err.message : err}`,
-      );
-    }
-  }
-
-  // Fallback: Piped API (proxies through own servers, bypasses YouTube IP blocks)
-  if (!result && ENABLE_PIPED_FALLBACK) {
-    try {
-      const pipedResult = await fetchTracksFromPiped(videoId);
-      if (pipedResult && pipedResult.captionTracks.length > 0) {
-        result = pipedResult;
-      }
-    } catch (err) {
-      console.warn(
-        `[captions] piped failed for ${videoId}: ${err instanceof Error ? err.message : err}`,
-      );
-    }
-  }
-
-  // Fallback: Invidious API (most instances have API disabled, kept for future re-activation)
-  if (!result && ENABLE_INVIDIOUS_FALLBACK) {
-    try {
-      const invResult = await fetchTracksFromInvidious(videoId);
-      if (invResult && invResult.captionTracks.length > 0) {
-        result = invResult;
-      }
-    } catch (err) {
-      console.warn(
-        `[captions] invidious failed for ${videoId}: ${err instanceof Error ? err.message : err}`,
       );
     }
   }
@@ -822,81 +822,105 @@ async function fetchCaptionCues(
   lang: string,
   remainingMs: () => number = () => 9000,
 ): Promise<CaptionCueRaw[]> {
-  // Try baseUrl + fmt=json3 (YouTube timedtext JSON format)
-  try {
-    const url = new URL(baseUrl);
-    url.searchParams.set("fmt", "json3");
+  const isThirdPartyUrl = !baseUrl.includes("youtube.com");
 
-    const res = await fetchWithTimeout(
-      url.toString(),
-      {
-        headers: {
-          "User-Agent":
-            "com.google.ios.youtube/20.03.02 (iPhone16,2; U; CPU iOS 18_2_1 like Mac OS X;)",
+  // For third-party URLs (Invidious), fetch directly as WebVTT
+  if (isThirdPartyUrl) {
+    try {
+      const res = await fetchWithTimeout(baseUrl, {}, Math.min(4000, remainingMs()));
+      if (res.ok) {
+        const text = await res.text();
+        if (text?.includes("-->")) {
+          console.log("[captions] third-party baseUrl returned WebVTT");
+          const cues = parseWebVTT(text);
+          if (cues.length > 0) return cues;
+        }
+      }
+    } catch (err) {
+      console.warn(
+        `[captions] third-party baseUrl fetch failed: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
+
+  // For YouTube URLs, try baseUrl + fmt=json3 (YouTube timedtext JSON format)
+  if (!isThirdPartyUrl) {
+    try {
+      const url = new URL(baseUrl);
+      url.searchParams.set("fmt", "json3");
+
+      const res = await fetchWithTimeout(
+        url.toString(),
+        {
+          headers: {
+            "User-Agent":
+              "com.google.ios.youtube/20.03.02 (iPhone16,2; U; CPU iOS 18_2_1 like Mac OS X;)",
+          },
         },
-      },
-      Math.min(4000, remainingMs()),
-    );
+        Math.min(4000, remainingMs()),
+      );
 
-    if (res.ok) {
-      const text = await res.text();
-      if (text) {
-        // Try JSON3 (YouTube timedtext) first
-        try {
-          const data = JSON.parse(text);
-          if (data.events) {
-            const cues: CaptionCueRaw[] = [];
+      if (res.ok) {
+        const text = await res.text();
+        if (text) {
+          try {
+            const data = JSON.parse(text);
+            if (data.events) {
+              const cues: CaptionCueRaw[] = [];
 
-            for (const event of data.events) {
-              if (!event.segs) continue;
+              for (const event of data.events) {
+                if (!event.segs) continue;
 
-              const segText = event.segs
-                .map((s: { utf8?: string }) => s.utf8 ?? "")
-                .join("")
-                .replace(/\n/g, " ")
-                .trim();
+                const segText = event.segs
+                  .map((s: { utf8?: string }) => s.utf8 ?? "")
+                  .join("")
+                  .replace(/\n/g, " ")
+                  .trim();
 
-              if (!segText) continue;
+                if (!segText) continue;
 
-              const startMs: number = event.tStartMs ?? 0;
-              const durationMs: number = event.dDurationMs ?? 0;
-              const start = startMs / 1000;
-              const duration = durationMs / 1000;
+                const startMs: number = event.tStartMs ?? 0;
+                const durationMs: number = event.dDurationMs ?? 0;
+                const start = startMs / 1000;
+                const duration = durationMs / 1000;
 
-              cues.push({
-                start,
-                duration,
-                end: start + duration,
-                text: segText,
-              });
+                cues.push({
+                  start,
+                  duration,
+                  end: start + duration,
+                  text: segText,
+                });
+              }
+
+              if (cues.length > 0) return cues;
             }
-
-            if (cues.length > 0) return cues;
-          }
-        } catch {
-          // JSON parse failed — check if response is WebVTT (Invidious URLs return WebVTT)
-          if (text.includes("-->")) {
-            console.log("[captions] baseUrl returned WebVTT instead of JSON3, parsing as WebVTT");
-            const cues = parseWebVTT(text);
-            if (cues.length > 0) return cues;
+          } catch {
+            // JSON parse failed — check if response is WebVTT
+            if (text.includes("-->")) {
+              console.log("[captions] baseUrl returned WebVTT instead of JSON3, parsing as WebVTT");
+              const cues = parseWebVTT(text);
+              if (cues.length > 0) return cues;
+            }
           }
         }
       }
+    } catch (err) {
+      console.warn(
+        `[captions] timedtext fetch failed: ${err instanceof Error ? err.message : err}`,
+      );
     }
-  } catch (err) {
-    console.warn(`[captions] timedtext fetch failed: ${err instanceof Error ? err.message : err}`);
+  }
+
+  // Fallback: Invidious WebVTT
+  if (ENABLE_INVIDIOUS_FALLBACK && remainingMs() >= 500) {
+    const invCues = await fetchCuesFromInvidious(videoId, lang);
+    if (invCues && invCues.length > 0) return invCues;
   }
 
   // Fallback: Piped API (proxies subtitle content, parallel racing)
-  if (ENABLE_PIPED_FALLBACK) {
+  if (ENABLE_PIPED_FALLBACK && remainingMs() >= 500) {
     const pipedCues = await fetchCuesFromPiped(videoId, lang);
     if (pipedCues && pipedCues.length > 0) return pipedCues;
-  }
-
-  // Fallback: Invidious WebVTT (most instances have API disabled, kept for future re-activation)
-  if (ENABLE_INVIDIOUS_FALLBACK) {
-    const invCues = await fetchCuesFromInvidious(videoId, lang);
-    if (invCues && invCues.length > 0) return invCues;
   }
 
   throw new Error("Failed to fetch caption cues from timedtext");
