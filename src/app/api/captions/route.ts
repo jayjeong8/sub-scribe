@@ -1031,12 +1031,46 @@ async function runDebugDiagnostics(videoId: string, lang?: string) {
     const html = await res.text();
     const hasPlayerResponse = html.includes("var ytInitialPlayerResponse = ");
     const hasConsentForm = html.includes("consent.youtube.com") || html.includes("CONSENT");
-    steps.watchPage = {
+    // biome-ignore lint/suspicious/noExplicitAny: debug diagnostics
+    const watchPageInfo: Record<string, any> = {
       status: res.status,
       htmlLength: html.length,
       hasPlayerResponse,
       hasConsentForm,
     };
+    // Extract caption tracks from watch page for diagnostics
+    if (hasPlayerResponse) {
+      try {
+        const marker = "var ytInitialPlayerResponse = ";
+        const sIdx = html.indexOf(marker);
+        const jsonStart = sIdx + marker.length;
+        let depth = 0;
+        let eIdx = jsonStart;
+        for (; eIdx < html.length; eIdx++) {
+          if (html[eIdx] === "{") depth++;
+          else if (html[eIdx] === "}") {
+            depth--;
+            if (depth === 0) break;
+          }
+        }
+        const pr = JSON.parse(html.substring(jsonStart, eIdx + 1));
+        const wpTracks: InnerTubeTrack[] =
+          pr.captions?.playerCaptionsTracklistRenderer?.captionTracks ?? [];
+        watchPageInfo.trackCount = wpTracks.length;
+        watchPageInfo.tracks = wpTracks.slice(0, 3).map((t: InnerTubeTrack) => ({
+          languageCode: t.languageCode ?? null,
+          vssId: t.vssId ?? null,
+          kind: t.kind ?? null,
+          hasBaseUrl: !!t.baseUrl,
+          baseUrlPreview: t.baseUrl?.slice(0, 80) ?? null,
+        }));
+        watchPageInfo.hasVideoDetails = !!pr.videoDetails;
+        watchPageInfo.wpTitle = pr.videoDetails?.title ?? null;
+      } catch (parseErr) {
+        watchPageInfo.parseError = parseErr instanceof Error ? parseErr.message : String(parseErr);
+      }
+    }
+    steps.watchPage = watchPageInfo;
   } catch (err) {
     steps.watchPage = {
       error: err instanceof Error ? err.message : String(err),
